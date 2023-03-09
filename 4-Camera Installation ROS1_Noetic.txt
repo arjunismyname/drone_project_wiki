@@ -1,0 +1,165 @@
+############################################################################
+  Raspberrypi camera setup using Pi OS Buster configuartion and ROS1 Noetic
+    https://jessestevens.com.au/2021/06/22/rpi-ros-noetic-raspicam-stereo/
+
+          https://varhowto.com/install-ros-noetic-raspberry-pi-4/
+############################################################################
+
+Compile the Raspicam_node tool to allow ROS to access the onboard Rasperry Pi camera.
+
+Amazingly fast interface
+Has a wide range of cameras compatible with it
+Can put two cameras into a single camera source side by side to source a stereo image. 
+
+
+Add the repository for rosdep to understand the dependencies that are laid out in the raspicam source to compile.
+
+$ sudo nano /etc/ros/rosdep/sources.list.d/30-ubiquity.list
+
+Now inside the nano editor we will add this line:
+yaml https://raw.githubusercontent.com/UbiquityRobotics/rosdep/master/raspberry-pi.yaml
+
+Save the file in nano, then exit. Now we can run rosdep update to use this new source:
+
+$ rosdep update
+
+Now that rosdep has knowledge of where to find the stuff needed to build raspicam_node, 
+let’s go and setup a new workspace 
+
+$ mkdir -p ~/drone_ws/src
+
+Change into this new src subdirectory:
+
+$ cd ~/drone_ws/src
+
+Let’s get the raspicam_node source code directly from their Github page:
+
+$ git clone https://github.com/UbiquityRobotics/raspicam_node.git
+
+Let’s move out of the “src” directory into the top of the new drone workspace we created:
+
+$ cd ~/drone_ws
+
+Let’s have ROS initialise for use the src directory and everything in it to use:
+
+$ wstool init src
+
+Use rosinstall_generator to set up what is needed in 4 different ways:
+
+
+$ rosinstall_generator compressed_image_transport --rosdistro noetic --deps --wet-only --tar > compressed_image_transport-wet.rosinstall
+
+$ rosinstall_generator camera_info_manager --rosdistro noetic --deps --wet-only --tar > camera_info_manager-wet.rosinstall
+
+$ rosinstall_generator dynamic_reconfigure --rosdistro noetic --deps --wet-only --tar > dynamic_reconfigure-wet.rosinstall
+
+$ rosinstall_generator diagnostics --rosdistro noetic --deps --wet-only --tar > diagnostics-wet.rosinstall
+
+
+Merge these into the “src” directory with wstool in 5 steps:
+
+$ wstool merge -t src compressed_image_transport-wet.rosinstall
+
+$ wstool merge -t src camera_info_manager-wet.rosinstall
+
+$ wstool merge -t src dynamic_reconfigure-wet.rosinstall
+
+$ wstool merge -t src diagnostics-wet.rosinstall
+
+$ wstool update -t src
+
+
+Let’s make rosdep find all the dependencies required to now build all of this:
+
+$ rosdep install --from-paths src --ignore-src --rosdistro noetic -y --os=debian:buster
+
+
+Finally, we can now build raspicam_node:
+
+$ sudo src/catkin/bin/catkin_make_isolated --install -DCMAKE_BUILD_TYPE=Release --install-space /opt/ros/noetic -j3 -DPYTHON_EXECUTABLE=/usr/bin/python3 
+
+raspicam_node is now built, and you will find the binaries in /opt/ros/noetic with the rest of ROS we built earlier. Before we can use it though, we must enable the camera port using:
+
+$ sudo raspi_config
+
+Look for interfaces, and camera – it will ask if you wish to enable it. 
+If it doesn’t automatically reboot, reboot the Raspberry Pi yourself:
+
+$ sudo reboot
+
+Make sure after reboot that the default pi user (or whatever user you’re using) is added to the video group to access the camera:
+
+$ sudo adduser pi video
+
+With an Arducam module (probably not necessary for other modules), I had to make sure that the I2C module was added to the kernel options by editing the boot config:
+
+sudo nano /boot/config.txt
+
+Put in:
+
+dtparam=i2c_vc=on
+
+Save (ctrl-o, enter, ctrl-x) and reboot again:
+
+$ sudo reboot
+
+
+---------------------------------------------------------------------------------
+Test that the camera works directly using the built in Raspberry Pi camera tools:
+---------------------------------------------------------------------------------
+
+$ raspistill -o temp.jpg
+
+You should see an image from the camera on screen for a short moment. If so, success! Time to use the module in ROS!
+
+Let’s source the bash setup file (this might need work below, we should probably only need to source what is in the /opt/ros/noetic directory):
+
+$ source ~/drone_ws/devel_isolated/setup.bash
+
+
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+
+Run roscore in the background:
+$ roscore &
+
+Launch the raspicam_node with the built in config for a v2 camera at 640×480 5fps (there are several build in modes, simply type roslaunch raspicam_node and press TAB a couple of times to see the options). We are again pushing this process to run in the background by putting the “&” symbol at the end:
+
+$ roslaunch raspicam_node camera_module_v2_640x480_5fps_autocapture.launch  &
+or
+$ roslaunch raspicam_node camerav2_1280x960_10fps.launch enable_raw:=true
+
+
+$ rosrun rqt_image_view rqt_image_view
+
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+
+Now let’s see how fast the update speed is in one of the Raspicam_node topics:
+
+rostopic hz /raspicam_node/image/compressed
+
+If you tried to run the above and got an error about calibration, do the following:
+
+cp -r ~/drone_ws/src/raspicam_node/camera_info ~/.ros
+
+If you got no errors, and you’re seeing an update of how fast the updates are happening per second, then you’re up and running!
+
+To stop the running processes above first press CTRL-C to kill off the rostopic command. This should now return you to a commandline. Now use the process management tools to bring those other 2 commands to the front to kill by typing:
+
+fg
+
+you’ll now see you can kill off the second process with CTRL-c, and then repeat to kill off the initial roscore.
+
+Sucess! You can now use the Raspberry Pi camera for ROS in a nice fast way with a neat node.
+
+This is not the end though, as for my Arducam, the image comes in as a side by side stereo image in a single image. It needs to be sliced in half in order for us to do stereo image processing. So I’m looking at using another node that does this job (depending on how fast it runs) or otherwise I’ll see if it’s possible to add the feature to raspicam_node itself so it’ll be a one-stop-shop for fast and cheap stereo image sourcing for 3D outcomes.
+
+Stay tuned..
+
+
+
+
+Using a camera not linked with RPi
+-----------------------------------
+
+IP Camera Ros Node
+https://github.com/rancheng/IP_Camera_Stream_ROS

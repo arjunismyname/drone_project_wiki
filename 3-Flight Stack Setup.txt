@@ -1,0 +1,209 @@
+#1 Streaming Optitrack data to ROS
+
+References:
+-----------
+
+[1] https://tuw-cpsg.github.io/tutorials/optitrack-and-ros/#:~:text=Configuring%20Motive&text=To%20stream%20the%20data%20to,Stream%20Rigid%20Bodies%20to%20True%20.
+
+[2] git clone https://github.com/ros-drivers/mocap_optitrack
+
+[3] https://ardupilot.org/dev/docs/ros-vio-tracking-camera.html
+
+[4] https://risc.readthedocs.io/1-indoor-flight.html
+
+[5] https://github.com/walmaawali/px4_vision_control
+
+
+
+#############################################################
+1.    Install Flight Dependencies for Python/MAVLink/ROS
+#############################################################
+
+Install Mavproxy
+--------------------------------------------------------------------------------------------
+
+$ sudo apt-get update
+
+$ sudo apt-get install python3-pip
+$ sudo apt-get install python3-dev python3-opencv python3-wxgtk4.0 python3-pip python3-matplotlib python3-lxml python3-pygame
+$ sudo apt-get install libxml2-dev libxslt-dev
+$ sudo pip3 install pymavlink
+$ sudo pip3 install PyYAML mavproxy
+$ echo 'export PATH="$PATH:$HOME/.local/bin"' >> ~/.bashrc
+
+
+Install Mavros
+-------------------------------------------------------------------------------------------
+
+$ sudo apt-get install ros-noetic-mavros ros-noetic-mavros-extras
+$ wget https://raw.githubusercontent.com/mavlink/mavros/master/mavros/scripts/install_geographiclib_datasets.sh
+$ chmod a+x install_geographiclib_datasets.sh
+$ sudo ./install_geographiclib_datasets.sh
+
+$ sudo apt-get install ros-noetic-rqt ros-noetic-rqt-common-plugins ros-noetic-rqt-robot-plugins
+
+
+#####################################################
+ 2     Install Optitrack Data Streaming Setup
+#####################################################
+
+VRPN Streaming Engine (vrpn_client_ros)
+---------------------------------------
+
+$ sudo apt-get install ros-noetic-vrpn-client-ros
+
+
+####################################################
+      Configure Ardupilot for Motion Capture 
+####################################################
+
+Connect to the flight controller with a ground station (i.e. Mission Planner or QGroundcontrol) and check that the following parameters are set as shown below:
+
+AHRS_EKF_TYPE = 2 (the default) to use EKF2 (as of this writing, EKF3 is not supported for handling external navigation data)
+
+EK2_ENABLE = 1 (the default)
+
+EK3_ENABLE = 0 (the default)
+
+GPS_TYPE = 0 to disable the GPS
+
+EK2_GPS_TYPE = 3 to disable the EKF’s use of the GPS
+
+EK2_POSNE_M_NSE = 0.1
+
+EK2_VELD_M_NSE = 0.1
+
+EK2_VELNE_M_NSE = 0.1
+
+COMPASS_ENABLE = 0, COMPASS_USE = 0, COMPASS_USE2 = 0, COMPASS_USE3 = 0 to disable the EKF’s use of the compass and instead rely on the heading from external navigation data.
+
+After the parameters are modified, reboot the flight controller.
+
+
+ Running the commands
+----------------------
+
+1. Place the drone(with markers) in the arena and start motive-optitrack
+
+2. Run the vrpn client and visualize the drone wrt world in rviz. Setup the 'tf' and 'pose' topics.
+
+$ roslaunch vrpn_client_ros sample.launch server:=192.168.8.163 & rosrun rviz rviz
+
+
+3. (Optional) Check that motion capture data is being forwarded to the ROS by running
+              [rostopic echo vrpn_client_node/<rigid_body_name>/pose]
+$ rostopic echo vrpn_client_node/custom_drone/pose
+
+
+4. Make sure OptiTrack Motive is running. Run the following command in the terminal
+  
+$ roslaunch px4_vision_control setup.launch
+
+
+Feeding MOCAP data to Pixhawk
+------------------------------
+
+Now, you need to set your flight controller firmware PX4, to accept mocap data. 
+EKF2 estimator can accept mocap data as vision-based data.
+
+### Settings in QGroundControl ###
+To set up the default companion computer message stream on TELEM 2, set the following parameters:
+
+Starting from firmware 1.9.0, change the following parameters:
+
+MAV_1_CONFIG = TELEM 2 (MAV_1_CONFIG is often used to map the TELEM 2 port)
+MAV_1_MODE = Onboard
+SER_TEL2_BAUD = 921600 (921600 or higher recommended for applications like log streaming or FastRTPS)
+Set EKF2_AID_MASK to 'not use GPS', and use 'vision position fusion' and 'vision yaw fusion'.
+
+
+
+### Getting MOCAP data into PX4 ###
+Assuming your 'vrpn_client_node' is still running from optitrack-interface on your RPi, 
+we will republish it to another topic by 'relay' command.
+
+5. You will need to run MAVROS node by openning a new separate terminal on RPi
+
+$ roslaunch mavros px4.launch fcu_url:=/dev/ttyUSB0:921600 gcs_url:=udp://@192.168.8.163:14550
+or
+$ roslaunch mavros px4.launch fcu_url:=/dev/ttyS0:921600 gcs_url:=udp://@192.168.8.163:14550
+
+
+USB connection:
+$ roslaunch mavros apm.launch fcu_url:=/dev/serial/by-id/usb-ArduPilot_Pixhawk1_3C0033000E51353336343437-if00:921600 gcs_url:=udp://@192.168.8.163:14550
+
+
+
+...............................................................................................
+Note:
+where fcu_url is the serial port that connects RPi to the flight controller. 
+Use ls /dev/ttyS0* command on your RPi to see if serial port is connected. 
+Parameters gcs_url:=udp://@192.168.8.163:14550 is used to allow you to receive data to 
+QGroundControl on your machine (that has to be connected to the same WiFi router). 
+Adjust the IP to match your PC IP, that runs QGroundControl.
+...............................................................................................
+
+
+6. MAVROS provides a plugin to relay pose data published on /mavros/vision_pose/pose to PX4. 
+Assuming that MAVROS is running, you just need to remap the pose topic that you get from Mocap 
+'/vrpn_client_node/<rigid_body_name>/pose' directly to '/mavros/vision_pose/pose'.
+
+$ rosrun topic_tools relay /vrpn_client_node/custom_drone/pose /mavros/mocap/pose
+
+
+7. (Optional) Check that motion capture data is being forwarded to the drone by running
+	      [you should see a stream of data when running this command]
+
+$ rostopic echo /mavros/mocap/pose
+
+
+8. Arm the drone by running this command in Linux terminal.
+$ rosrun mavros mavsafety arm
+
+
+9. 
+
+$ rosrun grvc-utils set_origin.py
+
+or
+
+$ cd drone_w
+$ rosrun vision_to_mavros set_origin.py
+
+
+
+################################################################################
+#########################   RUN SUMMARY  #######################################
+################################################################################
+
+Place the drone in the arena and start optitrack
+
+Terninal 1
+$ roscore
+
+Terninal 2: vrpn
+$ roslaunch vrpn_client_ros sample.launch server:=192.168.8.163 & rosrun rviz rviz
+
+In rviz, check that that drone's frame aligns with the world's origin frame
+
+Terninal 3: mavros
+$ roslaunch mavros apm.launch fcu_url:=/dev/serial/by-id/usb-ArduPilot_Pixhawk1_3C0033000E51353336343437-if00:921600 gcs_url:=udp://@192.168.8.163:14550
+
+Terninal 4: topic remapping from vrpn to mavros
+$ rosrun topic_tools relay /vrpn_client_node/custom_drone/pose /mavros/mocap/pose
+
+Terninal 5: set origin
+$ cd drone_ws
+$ rosrun vision_to_mavros set_origin.py
+
+Terninal 6: Test flight
+$ rosrun iq_gnc hover.py
+or 
+$ rosrun iq_gnc square.py
+
+Terninal 7: Other Checks
+$ rostopic echo vrpn_client_node/custom_drone/pose
+$ rostopic echo /mavros/mocap/pose
+$ rostopic hz /mavros/mocap/pose
+################################################################################
+################################################################################

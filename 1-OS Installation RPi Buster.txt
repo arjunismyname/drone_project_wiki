@@ -1,0 +1,24 @@
+###################################################################
+1.      Raspberry pi Headless Mode Installation
+###################################################################
+https://www.youtube.com/watch?v=8TOHKolXiG8
+
+
+hn - jaypi.local
+un - jaypi
+pw - jay
+
+
+hn - ubuntu
+un - ubuntu
+pw - jayboy2
+
+Headless mode shutdown (via ssh)
+
+Login:
+$ ssh jaypi@192.186.8.230 (ssh un@ip_addr)
+
+Shotdown:
+$ sudo shutdown now
+
+
